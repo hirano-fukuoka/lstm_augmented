@@ -134,9 +134,9 @@ if model and test_file:
         if not internal_cols:
             st.error("T_internal1〜5列が必要です")
         else:
-            all_preds = []
             progress = st.progress(0)
             status = st.empty()
+            all_preds = []
 
             for idx, col in enumerate(internal_cols):
                 temp_df = df_test[["time", col, "start_signal"]].rename(columns={col: "T_internal"})
