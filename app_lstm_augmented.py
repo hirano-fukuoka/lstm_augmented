@@ -90,7 +90,9 @@ window_size = 20
 st.header("1️⃣ 学習用データアップロード")
 train_file = st.file_uploader("T_internal, T_surface, start_signalを含むCSV", type="csv")
 
-if train_file:
+if train_file and st.session_state.model is None:
+    # モデルがないときだけ学習スタート
+    
     df = pd.read_csv(train_file)
     if set(["T_internal", "T_surface", "start_signal"]).issubset(df.columns):
         base_segment = extract_cycles(df, "start_signal", lag_seconds, duration_seconds, sampling_rate)
@@ -121,7 +123,7 @@ def prepare_predict_sequences(df, window_size=20):
         X.append(seq_x)
     return np.array(X)
 
-if st.session_state.model and test_file:
+if test_file and st.session_state.model:
     model = st.session_state.model  # ✅ セッションからモデル取得
     df_test = pd.read_csv(test_file)
     
