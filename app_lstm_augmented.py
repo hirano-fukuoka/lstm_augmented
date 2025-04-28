@@ -182,3 +182,4 @@ if model and test_file:
                 st.download_button("📥 ダウンロード", data=csv_bytes, file_name="predicted_surface_lstm_light.csv", mime="text/csv")
 
             status.text("✅ 予測完了！")
+            
