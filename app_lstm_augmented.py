@@ -6,10 +6,10 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from sklearn.model_selection import train_test_split
-import time  # ← 進捗バー更新用にtimeを追加！
+import time  # プログレスバー用
 
-# --- データ拡張 ---
-def augment_data(df, num_augments=100, noise_std=0.5, time_scale_range=(0.95, 1.05), temp_shift_range=(-2, 2)):
+# --- データ拡張（軽量版：50件） ---
+def augment_data(df, num_augments=50, noise_std=0.5, time_scale_range=(0.95, 1.05), temp_shift_range=(-2, 2)):
     aug_dfs = []
     progress = st.progress(0)
     status = st.empty()
@@ -31,7 +31,7 @@ def augment_data(df, num_augments=100, noise_std=0.5, time_scale_range=(0.95, 1.
 
         aug_dfs.append(temp)
 
-        # プログレスバー更新
+        # プログレス更新
         progress.progress((idx + 1) / num_augments)
         status.text(f"データ拡張中... {idx+1}/{num_augments}")
 
@@ -48,16 +48,16 @@ def create_sequences(df, window_size=20):
         y.append(seq_y)
     return np.array(X), np.array(y)
 
-# --- LSTMモデル作成 ---
+# --- 軽量版LSTMモデル作成（ユニット数を32に削減） ---
 def build_lstm_model(input_shape):
     model = Sequential()
-    model.add(LSTM(64, input_shape=input_shape))
+    model.add(LSTM(32, input_shape=input_shape))  # ← ここを32ユニットに！
     model.add(Dense(1))
     model.compile(optimizer='adam', loss='mse')
     return model
 
-# --- LSTM学習＋プログレスバー管理 ---
-def train_lstm_with_progress(model, X, y, epochs=20, batch_size=32):
+# --- 軽量版学習（エポック10回） ---
+def train_lstm_with_progress(model, X, y, epochs=10, batch_size=32):
     progress = st.progress(0)
     status = st.empty()
     for epoch in range(epochs):
@@ -81,8 +81,8 @@ def extract_cycles(df, start_col, lag_sec, duration_sec, sampling=0.1):
     return pd.concat(segments, ignore_index=True) if segments else pd.DataFrame()
 
 # --- Streamlitアプリ本体 ---
-st.set_page_config(page_title="LSTMによるT_surface予測", layout="wide")
-st.title("🌡️ LSTM版 T_surface 多点予測アプリ（データ拡張＋プログレスバー付き）")
+st.set_page_config(page_title="LSTMによるT_surface予測（軽量版）", layout="wide")
+st.title("🌡️ LSTM版 T_surface 多点予測アプリ（軽量版・CPU最適化）")
 
 # --- サイドバー設定 ---
 st.sidebar.header("⏱️ 時間設定")
@@ -102,14 +102,14 @@ if train_file:
     if set(["T_internal", "T_surface", "start_signal"]).issubset(df.columns):
         base_segment = extract_cycles(df, "start_signal", lag_seconds, duration_seconds, sampling_rate)
         st.subheader("🔄 データ拡張中...")
-        aug_train_df = augment_data(base_segment, num_augments=100)
+        aug_train_df = augment_data(base_segment, num_augments=50)  # ← 軽量版（50件）
 
         X, y = create_sequences(aug_train_df, window_size)
         X = X.reshape((X.shape[0], X.shape[1], 1))
 
         model = build_lstm_model((window_size, 1))
         st.subheader("🔄 LSTM学習中...")
-        model = train_lstm_with_progress(model, X, y, epochs=20)
+        model = train_lstm_with_progress(model, X, y, epochs=10)  # ← 軽量版（エポック10）
         st.success("✅ モデル学習完了")
     else:
         st.error("必要な列が見つかりません。")
@@ -117,6 +117,13 @@ if train_file:
 # --- 2. 予測データアップロード ---
 st.header("2️⃣ 予測用データアップロード")
 test_file = st.file_uploader("T_internal1〜5, start_signalを含むCSV", type="csv")
+
+def prepare_predict_sequences(df, window_size=20):
+    X = []
+    for i in range(len(df) - window_size):
+        seq_x = df.iloc[i:i+window_size].values
+        X.append(seq_x)
+    return np.array(X)
 
 if model and test_file:
     df_test = pd.read_csv(test_file)
@@ -172,6 +179,6 @@ if model and test_file:
                 # --- CSV出力 ---
                 st.subheader("💾 予測結果CSVダウンロード")
                 csv_bytes = result_df.to_csv(index=False).encode("utf-8")
-                st.download_button("📥 ダウンロード", data=csv_bytes, file_name="predicted_surface_lstm.csv", mime="text/csv")
+                st.download_button("📥 ダウンロード", data=csv_bytes, file_name="predicted_surface_lstm_light.csv", mime="text/csv")
 
             status.text("✅ 予測完了！")
