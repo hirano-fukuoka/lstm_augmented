@@ -6,11 +6,15 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from sklearn.model_selection import train_test_split
+import time  # ← 進捗バー更新用にtimeを追加！
 
 # --- データ拡張 ---
 def augment_data(df, num_augments=100, noise_std=0.5, time_scale_range=(0.95, 1.05), temp_shift_range=(-2, 2)):
     aug_dfs = []
-    for _ in range(num_augments):
+    progress = st.progress(0)
+    status = st.empty()
+
+    for idx in range(num_augments):
         temp = df.copy()
 
         # ノイズ付加
@@ -26,6 +30,12 @@ def augment_data(df, num_augments=100, noise_std=0.5, time_scale_range=(0.95, 1.
         temp["T_surface"] += shift
 
         aug_dfs.append(temp)
+
+        # プログレスバー更新
+        progress.progress((idx + 1) / num_augments)
+        status.text(f"データ拡張中... {idx+1}/{num_augments}")
+
+    status.text("✅ データ拡張完了")
     return pd.concat(aug_dfs, ignore_index=True)
 
 # --- LSTM用データ準備 ---
@@ -46,6 +56,17 @@ def build_lstm_model(input_shape):
     model.compile(optimizer='adam', loss='mse')
     return model
 
+# --- LSTM学習＋プログレスバー管理 ---
+def train_lstm_with_progress(model, X, y, epochs=20, batch_size=32):
+    progress = st.progress(0)
+    status = st.empty()
+    for epoch in range(epochs):
+        model.fit(X, y, epochs=1, batch_size=batch_size, verbose=0)
+        progress.progress((epoch + 1) / epochs)
+        status.text(f"LSTM学習中... エポック {epoch+1}/{epochs}")
+    status.text("✅ LSTM学習完了")
+    return model
+
 # --- サイクル検出＆切り出し ---
 def extract_cycles(df, start_col, lag_sec, duration_sec, sampling=0.1):
     starts = df[df[start_col].diff() == 1].index
@@ -59,17 +80,9 @@ def extract_cycles(df, start_col, lag_sec, duration_sec, sampling=0.1):
             segments.append(df.iloc[t_start:t_end].copy())
     return pd.concat(segments, ignore_index=True) if segments else pd.DataFrame()
 
-# --- 予測データ作成 ---
-def prepare_predict_sequences(df, window_size=20):
-    X = []
-    for i in range(len(df) - window_size):
-        seq_x = df.iloc[i:i+window_size].values
-        X.append(seq_x)
-    return np.array(X)
-
 # --- Streamlitアプリ本体 ---
 st.set_page_config(page_title="LSTMによるT_surface予測", layout="wide")
-st.title("🌡️ LSTM版 T_surface 多点予測アプリ（データ拡張あり）")
+st.title("🌡️ LSTM版 T_surface 多点予測アプリ（データ拡張＋プログレスバー付き）")
 
 # --- サイドバー設定 ---
 st.sidebar.header("⏱️ 時間設定")
@@ -88,13 +101,15 @@ if train_file:
     df = pd.read_csv(train_file)
     if set(["T_internal", "T_surface", "start_signal"]).issubset(df.columns):
         base_segment = extract_cycles(df, "start_signal", lag_seconds, duration_seconds, sampling_rate)
+        st.subheader("🔄 データ拡張中...")
         aug_train_df = augment_data(base_segment, num_augments=100)
 
         X, y = create_sequences(aug_train_df, window_size)
         X = X.reshape((X.shape[0], X.shape[1], 1))
 
         model = build_lstm_model((window_size, 1))
-        model.fit(X, y, epochs=20, batch_size=32, verbose=1)
+        st.subheader("🔄 LSTM学習中...")
+        model = train_lstm_with_progress(model, X, y, epochs=20)
         st.success("✅ モデル学習完了")
     else:
         st.error("必要な列が見つかりません。")
@@ -113,7 +128,10 @@ if model and test_file:
             st.error("T_internal1〜5列が必要です")
         else:
             all_preds = []
-            for col in internal_cols:
+            progress = st.progress(0)
+            status = st.empty()
+
+            for idx, col in enumerate(internal_cols):
                 temp_df = df_test[["time", col, "start_signal"]].rename(columns={col: "T_internal"})
                 segments = extract_cycles(temp_df, "start_signal", lag_seconds, duration_seconds, sampling_rate)
                 if not segments.empty:
@@ -123,6 +141,10 @@ if model and test_file:
                     result_df = segments.iloc[window_size:].copy()
                     result_df[f"Predicted_T_surface_{col}"] = y_pred.flatten()
                     all_preds.append(result_df.set_index("time")[[f"Predicted_T_surface_{col}"]])
+
+                # プログレス更新
+                progress.progress((idx + 1) / len(internal_cols))
+                status.text(f"予測中... {idx+1}/{len(internal_cols)}個完了")
 
             if all_preds:
                 result_df = pd.concat(all_preds, axis=1).reset_index()
@@ -134,13 +156,13 @@ if model and test_file:
                 # --- グラフ描画 ---
                 st.subheader("📈 入力vs予測グラフ")
                 fig, axes = plt.subplots(len(internal_cols), 1, figsize=(10, 2.5 * len(internal_cols)), sharex=True)
-                time = result_df["time"]
+                time_vals = result_df["time"]
                 for i, col in enumerate(internal_cols):
                     ax = axes[i]
                     pred_col = f"Predicted_T_surface_{col}"
-                    original_trimmed = df_test[col][len(df_test) - len(time):].values
-                    ax.plot(time, original_trimmed, label=col, color="tab:blue")
-                    ax.plot(time, result_df[pred_col], label=pred_col, color="tab:red", linestyle="--")
+                    original_trimmed = df_test[col][len(df_test) - len(time_vals):].values
+                    ax.plot(time_vals, original_trimmed, label=col, color="tab:blue")
+                    ax.plot(time_vals, result_df[pred_col], label=pred_col, color="tab:red", linestyle="--")
                     ax.set_ylabel("温度 [°C]")
                     ax.set_title(f"{col} vs 予測")
                     ax.legend()
@@ -151,3 +173,5 @@ if model and test_file:
                 st.subheader("💾 予測結果CSVダウンロード")
                 csv_bytes = result_df.to_csv(index=False).encode("utf-8")
                 st.download_button("📥 ダウンロード", data=csv_bytes, file_name="predicted_surface_lstm.csv", mime="text/csv")
+
+            status.text("✅ 予測完了！")
